@@ -325,7 +325,8 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
       if (diff >= 0 && diff < 7) counts[diff] = (counts[diff] ?? 0) + 1;
     }
 
-    final maxY = (counts.values.reduce((a, b) => a > b ? a : b) + 1).toDouble().clamp(4, 20);
+    // FIX: clamp with double literals so return type is double, not num
+    final maxY = (counts.values.reduce((a, b) => a > b ? a : b) + 1).toDouble().clamp(4.0, 20.0);
 
     final bars = List.generate(7, (i) {
       final day = 6 - i;
