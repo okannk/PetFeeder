@@ -2,3 +2,12 @@ config.h
 backend/node_modules/
 backend/data/
 *.log
+
+# Flutter build çıktıları
+mobile/build/
+mobile/ios/
+mobile/android/
+mobile/.dart_tool/
+mobile/.flutter-plugins
+mobile/.flutter-plugins-dependencies
+mobile/pubspec.lock

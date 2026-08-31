@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:fl_chart/fl_chart.dart';
 import '../models/device.dart';
 import '../services/api_service.dart';
+import '../services/notification_service.dart';
 
 class DeviceDetailScreen extends StatefulWidget {
   final String deviceId;
@@ -14,13 +16,11 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
   final _api = ApiService();
   Device? _device;
   List<HistoryEntry> _history = [];
+  List<ScheduleSlot> _slots = [];
   bool _loading = true;
   bool _feeding = false;
   bool _savingSchedule = false;
   int _feedPortions = 1;
-
-  ScheduleSlot _morning = ScheduleSlot(enabled: false, hour: 8, minute: 0, portions: 1);
-  ScheduleSlot _evening = ScheduleSlot(enabled: false, hour: 18, minute: 0, portions: 1);
 
   @override
   void initState() {
@@ -33,12 +33,11 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
     try {
       final devices = await _api.fetchDevices();
       final device = devices.firstWhere((d) => d.id == widget.deviceId);
-      final history = await _api.fetchHistory(widget.deviceId);
+      final history = await _api.fetchHistory(widget.deviceId, limit: 50);
       if (!mounted) return;
       setState(() {
         _device = device;
-        _morning = device.schedule.morning;
-        _evening = device.schedule.evening;
+        _slots = List.from(device.schedule.slots);
         _history = history;
         _loading = false;
       });
@@ -50,18 +49,16 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
   }
 
   Future<void> _feed() async {
+    final device = _device!;
     setState(() => _feeding = true);
     try {
-      final result = await _api.feed(widget.deviceId, _feedPortions);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(result['message']?.toString() ?? 'Besleme tamamlandi.')),
-        );
-      }
+      final result = await _api.feed(device.id, _feedPortions);
+      if (!mounted) return;
+      final msg = result['message']?.toString() ?? 'Besleme tamamlandı.';
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+      await NotificationService.showNow('PetFeeder — ${device.name}', msg);
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Besleme basarisiz: $e')));
-      }
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Besleme başarısız: $e')));
     } finally {
       if (mounted) setState(() => _feeding = false);
       _load();
@@ -69,162 +66,387 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
   }
 
   Future<void> _saveSchedule() async {
+    final device = _device!;
     setState(() => _savingSchedule = true);
     try {
-      await _api.updateSchedule(widget.deviceId, Schedule(morning: _morning, evening: _evening));
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Zamanlama kaydedildi.')));
-      }
+      await _api.updateSchedule(device.id, Schedule(slots: _slots));
+      await NotificationService.scheduleFeedings(device.id, device.name, _slots);
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Zamanlama kaydedildi.')));
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Kaydedilemedi: $e')));
-      }
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Kaydedilemedi: $e')));
     } finally {
       if (mounted) setState(() => _savingSchedule = false);
+    }
+  }
+
+  Future<void> _rename() async {
+    final ctrl = TextEditingController(text: _device?.name ?? '');
+    final result = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Cihazı Yeniden Adlandır'),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          decoration: const InputDecoration(border: OutlineInputBorder()),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('İptal')),
+          FilledButton(onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim()), child: const Text('Kaydet')),
+        ],
+      ),
+    );
+    if (result != null && result.isNotEmpty && mounted) {
+      try {
+        final updated = await _api.renameDevice(widget.deviceId, result);
+        setState(() => _device = updated);
+      } catch (e) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Hata: $e')));
+      }
+    }
+  }
+
+  Future<void> _delete() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Cihazı Sil'),
+        content: Text('${_device?.name ?? 'Bu cihaz'} kalıcı olarak silinecek.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('İptal')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Sil'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true && mounted) {
+      try {
+        await _api.deleteDevice(widget.deviceId);
+        await NotificationService.cancelDevice(widget.deviceId);
+        if (mounted) Navigator.of(context).pop(true);
+      } catch (e) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Silme başarısız: $e')));
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(_device?.name ?? 'Cihaz')),
+      appBar: AppBar(
+        title: Text(_device?.name ?? 'Cihaz'),
+        actions: [
+          PopupMenuButton<String>(
+            onSelected: (v) {
+              if (v == 'rename') _rename();
+              if (v == 'delete') _delete();
+            },
+            itemBuilder: (_) => const [
+              PopupMenuItem(value: 'rename', child: ListTile(
+                leading: Icon(Icons.edit_outlined), title: Text('Yeniden Adlandır'), contentPadding: EdgeInsets.zero)),
+              PopupMenuItem(value: 'delete', child: ListTile(
+                leading: Icon(Icons.delete_outline, color: Colors.red),
+                title: Text('Cihazı Sil', style: TextStyle(color: Colors.red)),
+                contentPadding: EdgeInsets.zero)),
+            ],
+          ),
+        ],
+      ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _device == null
-              ? const Center(child: Text('Cihaz bulunamadi.'))
+              ? const Center(child: Text('Cihaz bulunamadı.'))
               : RefreshIndicator(
                   onRefresh: _load,
                   child: ListView(
                     padding: const EdgeInsets.all(16),
                     children: [
-                      _buildFeedCard(),
+                      _buildStatusFeedCard(),
                       const SizedBox(height: 16),
-                      _buildScheduleCard('🌅 Sabah beslemesi', _morning, (s) => setState(() => _morning = s)),
-                      const SizedBox(height: 12),
-                      _buildScheduleCard('🌙 Aksam beslemesi', _evening, (s) => setState(() => _evening = s)),
+                      _buildScheduleCard(),
                       const SizedBox(height: 16),
-                      SizedBox(
-                        width: double.infinity,
-                        child: FilledButton.tonal(
-                          onPressed: _savingSchedule ? null : _saveSchedule,
-                          child: Text(_savingSchedule ? 'Kaydediliyor...' : 'Zamanlamayi Kaydet'),
-                        ),
-                      ),
-                      const SizedBox(height: 24),
-                      const Text('Son beslemeler', style: TextStyle(fontWeight: FontWeight.bold)),
-                      const SizedBox(height: 8),
-                      if (_history.isEmpty)
-                        const Text('Henuz kayit yok.', style: TextStyle(color: Colors.grey)),
-                      ..._history.map((h) => Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 4),
-                            child: Text('${_formatDate(h.ts)} — ${h.message ?? h.status ?? ''}'),
-                          )),
+                      if (_history.isNotEmpty) _buildChartCard(),
+                      if (_history.isNotEmpty) const SizedBox(height: 16),
+                      _buildHistoryCard(),
                     ],
                   ),
                 ),
     );
   }
 
-  Widget _buildFeedCard() {
+  // ── Durum + Manuel Besleme ──────────────────────────────────────────────────
+  Widget _buildStatusFeedCard() {
     final device = _device!;
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Icon(device.online ? Icons.wifi : Icons.wifi_off,
+                size: 18, color: device.online ? Colors.green[700] : Colors.red[700]),
+            const SizedBox(width: 6),
             Text(
-              device.online ? 'Cevrimici' : 'Cevrimdisi',
+              device.online ? 'Çevrimiçi' : 'Çevrimdışı',
               style: TextStyle(
-                color: device.online ? Colors.green[700] : Colors.red[700],
                 fontWeight: FontWeight.bold,
+                color: device.online ? Colors.green[700] : Colors.red[700],
               ),
             ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                const Text('Porsiyon: '),
-                IconButton(
-                  icon: const Icon(Icons.remove_circle_outline),
-                  onPressed: _feedPortions > 1 ? () => setState(() => _feedPortions--) : null,
-                ),
-                Text('$_feedPortions', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                IconButton(
-                  icon: const Icon(Icons.add_circle_outline),
-                  onPressed: _feedPortions < 10 ? () => setState(() => _feedPortions++) : null,
-                ),
-              ],
+          ]),
+          const SizedBox(height: 12),
+          Row(children: [
+            const Text('Porsiyon: '),
+            IconButton(
+              icon: const Icon(Icons.remove_circle_outline),
+              onPressed: _feedPortions > 1 ? () => setState(() => _feedPortions--) : null,
             ),
-            const SizedBox(height: 8),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton.icon(
-                onPressed: (device.online && !_feeding) ? _feed : null,
-                icon: const Icon(Icons.restaurant),
-                label: Text(_feeding ? 'Besleniyor...' : 'Simdi Besle'),
-              ),
+            Text('$_feedPortions', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            IconButton(
+              icon: const Icon(Icons.add_circle_outline),
+              onPressed: _feedPortions < 10 ? () => setState(() => _feedPortions++) : null,
             ),
-          ],
-        ),
+          ]),
+          const SizedBox(height: 4),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton.icon(
+              onPressed: (device.online && !_feeding) ? _feed : null,
+              icon: const Icon(Icons.restaurant),
+              label: Text(_feeding ? 'Besleniyor...' : 'Şimdi Besle'),
+            ),
+          ),
+        ]),
       ),
     );
   }
 
-  Widget _buildScheduleCard(String title, ScheduleSlot slot, ValueChanged<ScheduleSlot> onChange) {
+  // ── Çoklu öğün zamanlaması ─────────────────────────────────────────────────
+  Widget _buildScheduleCard() {
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Expanded(child: Text(title, style: const TextStyle(fontWeight: FontWeight.bold))),
-                Switch(
-                  value: slot.enabled,
-                  onChanged: (v) => onChange(slot.copyWith(enabled: v)),
-                ),
-              ],
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('Besleme Zamanlaması',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+          const SizedBox(height: 4),
+          const Text('Zamanlamayı kaydettiğinde telefon bildirimi de ayarlanır.',
+              style: TextStyle(color: Colors.grey, fontSize: 11)),
+          const SizedBox(height: 12),
+          ...List.generate(_slots.length, _buildSlotRow),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton.tonal(
+              onPressed: _savingSchedule ? null : _saveSchedule,
+              child: Text(_savingSchedule ? 'Kaydediliyor...' : 'Zamanlamayı Kaydet'),
             ),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                _numberField('Saat', slot.hour, 0, 23, (v) => onChange(slot.copyWith(hour: v))),
-                _numberField('Dakika', slot.minute, 0, 59, (v) => onChange(slot.copyWith(minute: v))),
-                _numberField('Porsiyon', slot.portions, 1, 10, (v) => onChange(slot.copyWith(portions: v))),
-              ],
-            ),
-          ],
-        ),
+          ),
+        ]),
       ),
     );
   }
 
-  Widget _numberField(String label, int value, int min, int max, ValueChanged<int> onChange) {
-    return Column(
-      children: [
-        Text(label, style: const TextStyle(fontSize: 11, color: Colors.grey)),
-        Row(
-          children: [
-            IconButton(
-              icon: const Icon(Icons.remove, size: 18),
-              onPressed: value > min ? () => onChange(value - 1) : null,
-            ),
-            SizedBox(width: 28, child: Text('$value', textAlign: TextAlign.center)),
-            IconButton(
-              icon: const Icon(Icons.add, size: 18),
-              onPressed: value < max ? () => onChange(value + 1) : null,
-            ),
-          ],
+  Widget _buildSlotRow(int i) {
+    final slot = _slots[i];
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(children: [
+        SizedBox(
+          width: 50,
+          child: Text(slot.label,
+              style: TextStyle(
+                fontWeight: FontWeight.w600,
+                color: slot.enabled ? Theme.of(context).colorScheme.primary : Colors.grey,
+              )),
         ),
-      ],
+        Switch(
+          value: slot.enabled,
+          onChanged: (v) => setState(() => _slots[i] = slot.copyWith(enabled: v)),
+        ),
+        Expanded(
+          child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+            _numPad(slot.hour, 0, 23, (v) => setState(() => _slots[i] = slot.copyWith(hour: v)), pad: true),
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 2),
+              child: Text(':', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+            ),
+            _numPad(slot.minute, 0, 59, (v) => setState(() => _slots[i] = slot.copyWith(minute: v)), pad: true),
+          ]),
+        ),
+        Row(children: [
+          const Icon(Icons.restaurant, size: 13, color: Colors.grey),
+          const SizedBox(width: 2),
+          _numPad(slot.portions, 1, 10, (v) => setState(() => _slots[i] = slot.copyWith(portions: v))),
+        ]),
+      ]),
+    );
+  }
+
+  Widget _numPad(int value, int min, int max, ValueChanged<int> onChange, {bool pad = false}) {
+    final label = pad ? value.toString().padLeft(2, '0') : value.toString();
+    return Row(mainAxisSize: MainAxisSize.min, children: [
+      SizedBox(
+        width: 22, height: 30,
+        child: IconButton(
+          padding: EdgeInsets.zero,
+          iconSize: 15,
+          icon: const Icon(Icons.remove),
+          onPressed: value > min ? () => onChange(value - 1) : null,
+        ),
+      ),
+      SizedBox(
+        width: 26,
+        child: Text(label, textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
+      ),
+      SizedBox(
+        width: 22, height: 30,
+        child: IconButton(
+          padding: EdgeInsets.zero,
+          iconSize: 15,
+          icon: const Icon(Icons.add),
+          onPressed: value < max ? () => onChange(value + 1) : null,
+        ),
+      ),
+    ]);
+  }
+
+  // ── Besleme geçmişi grafiği ─────────────────────────────────────────────────
+  Widget _buildChartCard() {
+    final now = DateTime.now();
+    final Map<int, int> counts = {for (int i = 0; i < 7; i++) i: 0};
+    for (final h in _history) {
+      final dt = DateTime.tryParse(h.ts)?.toLocal();
+      if (dt == null) continue;
+      final diff = now.difference(dt).inDays;
+      if (diff >= 0 && diff < 7) counts[diff] = (counts[diff] ?? 0) + 1;
+    }
+
+    final maxY = (counts.values.reduce((a, b) => a > b ? a : b) + 1).toDouble().clamp(4, 20);
+
+    final bars = List.generate(7, (i) {
+      final day = 6 - i;
+      return BarChartGroupData(x: i, barRods: [
+        BarChartRodData(
+          toY: (counts[day] ?? 0).toDouble(),
+          color: Theme.of(context).colorScheme.primary,
+          width: 18,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(4)),
+        ),
+      ]);
+    });
+
+    final labels = List.generate(7, (i) {
+      final d = now.subtract(Duration(days: 6 - i));
+      return '${d.day}/${d.month}';
+    });
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 16, 16, 8),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('Son 7 Gün',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+          const SizedBox(height: 16),
+          SizedBox(
+            height: 130,
+            child: BarChart(BarChartData(
+              maxY: maxY,
+              barGroups: bars,
+              gridData: FlGridData(
+                show: true,
+                drawVerticalLine: false,
+                horizontalInterval: 1,
+                getDrawingHorizontalLine: (v) =>
+                    FlLine(color: Colors.grey.withOpacity(0.15), strokeWidth: 1),
+              ),
+              borderData: FlBorderData(show: false),
+              titlesData: FlTitlesData(
+                leftTitles: AxisTitles(
+                  sideTitles: SideTitles(
+                    showTitles: true,
+                    reservedSize: 20,
+                    interval: 1,
+                    getTitlesWidget: (v, _) => v == v.floorToDouble()
+                        ? Text(v.toInt().toString(),
+                            style: const TextStyle(fontSize: 10, color: Colors.grey))
+                        : const SizedBox.shrink(),
+                  ),
+                ),
+                bottomTitles: AxisTitles(
+                  sideTitles: SideTitles(
+                    showTitles: true,
+                    reservedSize: 20,
+                    getTitlesWidget: (v, _) {
+                      final idx = v.toInt();
+                      if (idx < 0 || idx >= labels.length) return const SizedBox.shrink();
+                      return Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(labels[idx],
+                            style: const TextStyle(fontSize: 9, color: Colors.grey)),
+                      );
+                    },
+                  ),
+                ),
+                topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+              ),
+              barTouchData: BarTouchData(
+                touchTooltipData: BarTouchTooltipData(
+                  getTooltipColor: (_) => Theme.of(context).colorScheme.inverseSurface,
+                  getTooltipItem: (_, __, rod, ___) => BarTooltipItem(
+                    '${rod.toY.toInt()} besleme',
+                    TextStyle(
+                      fontSize: 11,
+                      color: Theme.of(context).colorScheme.onInverseSurface,
+                    ),
+                  ),
+                ),
+              ),
+            )),
+          ),
+        ]),
+      ),
+    );
+  }
+
+  // ── Besleme geçmişi listesi ─────────────────────────────────────────────────
+  Widget _buildHistoryCard() {
+    if (_history.isEmpty) {
+      return const Text('Henüz kayıt yok.', style: TextStyle(color: Colors.grey));
+    }
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('Son Beslemeler',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+          const SizedBox(height: 8),
+          ..._history.take(15).map((h) => Padding(
+                padding: const EdgeInsets.symmetric(vertical: 3),
+                child: Row(children: [
+                  Icon(Icons.circle, size: 6, color: Colors.grey[400]),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '${_fmt(h.ts)} — ${h.message ?? h.status ?? ''}',
+                      style: const TextStyle(fontSize: 13),
+                    ),
+                  ),
+                ]),
+              )),
+        ]),
+      ),
     );
   }
 }
 
-String _formatDate(String iso) {
+String _fmt(String iso) {
   final dt = DateTime.tryParse(iso)?.toLocal();
   if (dt == null) return iso;
-  String two(int n) => n.toString().padLeft(2, '0');
-  return '${two(dt.day)}.${two(dt.month)}.${dt.year} ${two(dt.hour)}:${two(dt.minute)}';
+  String z(int n) => n.toString().padLeft(2, '0');
+  return '${z(dt.day)}.${z(dt.month)}.${dt.year} ${z(dt.hour)}:${z(dt.minute)}';
 }

@@ -16,27 +16,34 @@ workflows:
       - name: iOS platform klasörünü oluştur
         script: |
           cd mobile
-          # ios/ klasörü repo'da yoksa flutter create ile üret
           if [ ! -d "ios" ]; then
             flutter create . --platforms=ios --org com.okan --project-name petfeeder
           fi
 
-      - name: Info.plist — yerel HTTP ve ağ izinleri
+      - name: Info.plist — izinler ve ağ ayarları
         script: |
           PLIST="mobile/ios/Runner/Info.plist"
 
-          # NSAppTransportSecurity — yerel HTTP sunucusuna (backend) izin ver
+          # Yerel HTTP (backend + kurulum AP'si 192.168.4.1)
           /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" "$PLIST" 2>/dev/null || true
           /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool YES" "$PLIST" 2>/dev/null || true
           /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsLocalNetworking bool YES" "$PLIST" 2>/dev/null || true
 
-          # iOS 14+ yerel ağ kullanım açıklaması
-          /usr/libexec/PlistBuddy -c "Add :NSLocalNetworkUsageDescription string 'PetFeeder cihazina yerel ag uzerinden baglanmak icin gereklidir.'" "$PLIST" 2>/dev/null || true
+          # iOS 14+ yerel ağ izni (192.168.4.1 erişimi için)
+          /usr/libexec/PlistBuddy -c "Add :NSLocalNetworkUsageDescription string 'PetFeeder cihazını yerel ağ üzerinden kurmak ve yönetmek için gereklidir.'" "$PLIST" 2>/dev/null || true
+
+          # Bonjour servisleri (iOS 14+ yerel ağ keşfi)
+          /usr/libexec/PlistBuddy -c "Add :NSBonjourServices array" "$PLIST" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :NSBonjourServices:0 string '_http._tcp'" "$PLIST" 2>/dev/null || true
+
+          # Bildirim izni (flutter_local_notifications)
+          /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes array" "$PLIST" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes:0 string 'fetch'" "$PLIST" 2>/dev/null || true
 
           # Uygulama görünen adı
           /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName PetFeeder" "$PLIST" 2>/dev/null || true
 
-          echo "--- Info.plist kontrol ---"
+          echo "--- Info.plist ---"
           cat "$PLIST"
 
       - name: iOS release build (imzasız)

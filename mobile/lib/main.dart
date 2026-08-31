@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
+import 'services/notification_service.dart';
 import 'screens/device_list_screen.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await NotificationService.init();
   runApp(const PetFeederApp());
 }
 

@@ -9,7 +9,9 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  final _controller = TextEditingController();
+  final _urlController = TextEditingController();
+  final _keyController = TextEditingController();
+  bool _keyVisible = false;
   bool _saving = false;
 
   @override
@@ -18,14 +20,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _load();
   }
 
+  @override
+  void dispose() {
+    _urlController.dispose();
+    _keyController.dispose();
+    super.dispose();
+  }
+
   Future<void> _load() async {
     final url = await SettingsService.getBaseUrl();
-    if (mounted) setState(() => _controller.text = url);
+    final key = await SettingsService.getApiKey();
+    if (mounted) {
+      setState(() {
+        _urlController.text = url;
+        _keyController.text = key;
+      });
+    }
   }
 
   Future<void> _save() async {
     setState(() => _saving = true);
-    await SettingsService.setBaseUrl(_controller.text);
+    await SettingsService.setBaseUrl(_urlController.text);
+    await SettingsService.setApiKey(_keyController.text);
     if (!mounted) return;
     setState(() => _saving = false);
     Navigator.of(context).pop(true);
@@ -40,22 +56,42 @@ class _SettingsScreenState extends State<SettingsScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Backend adresi', style: TextStyle(fontWeight: FontWeight.bold)),
+            const Text('Backend Adresi', style: TextStyle(fontWeight: FontWeight.bold)),
             const SizedBox(height: 4),
             const Text(
-              "Ornek: http://192.168.1.10:3001 (backend'i calistiran bilgisayarin yerel IP'si)",
+              'Yerel ağ: http://192.168.1.x:3001\nUzaktan: https://xxx.trycloudflare.com',
               style: TextStyle(color: Colors.grey, fontSize: 12),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 8),
             TextField(
-              controller: _controller,
+              controller: _urlController,
               keyboardType: TextInputType.url,
               decoration: const InputDecoration(
                 border: OutlineInputBorder(),
                 hintText: 'http://192.168.1.10:3001',
               ),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 20),
+            const Text('API Anahtarı', style: TextStyle(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 4),
+            const Text(
+              'Backend başladığında konsola yazdırılır.',
+              style: TextStyle(color: Colors.grey, fontSize: 12),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _keyController,
+              obscureText: !_keyVisible,
+              decoration: InputDecoration(
+                border: const OutlineInputBorder(),
+                hintText: 'API anahtarı',
+                suffixIcon: IconButton(
+                  icon: Icon(_keyVisible ? Icons.visibility_off : Icons.visibility),
+                  onPressed: () => setState(() => _keyVisible = !_keyVisible),
+                ),
+              ),
+            ),
+            const SizedBox(height: 24),
             SizedBox(
               width: double.infinity,
               child: FilledButton(
