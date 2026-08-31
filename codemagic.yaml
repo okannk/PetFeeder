@@ -20,6 +20,16 @@ workflows:
             flutter create . --platforms=ios --org com.okan --project-name petfeeder
           fi
 
+      - name: Kod imzalamayı devre dışı bırak
+        script: |
+          PBXPROJ="mobile/ios/Runner.xcodeproj/project.pbxproj"
+          # Tüm DEVELOPMENT_TEAM değerlerini boşalt
+          sed -i '' 's/DEVELOPMENT_TEAM = [^;]*;/DEVELOPMENT_TEAM = "";/g' "$PBXPROJ"
+          # CODE_SIGNING_REQUIRED = NO
+          sed -i '' 's/CODE_SIGNING_REQUIRED = [^;]*;/CODE_SIGNING_REQUIRED = NO;/g' "$PBXPROJ"
+          sed -i '' 's/CODE_SIGNING_ALLOWED = [^;]*;/CODE_SIGNING_ALLOWED = NO;/g' "$PBXPROJ"
+          echo "pbxproj güncellendi."
+
       - name: Info.plist — izinler ve ağ ayarları
         script: |
           PLIST="mobile/ios/Runner/Info.plist"
@@ -29,27 +39,51 @@ workflows:
           /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool YES" "$PLIST" 2>/dev/null || true
           /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsLocalNetworking bool YES" "$PLIST" 2>/dev/null || true
 
-          # iOS 14+ yerel ağ izni (192.168.4.1 erişimi için)
-          /usr/libexec/PlistBuddy -c "Add :NSLocalNetworkUsageDescription string 'PetFeeder cihazını yerel ağ üzerinden kurmak ve yönetmek için gereklidir.'" "$PLIST" 2>/dev/null || true
+          # iOS 14+ yerel ağ izni
+          /usr/libexec/PlistBuddy -c "Add :NSLocalNetworkUsageDescription string 'PetFeeder cihazini yerel ag uzerinden kurmak ve yonetmek icin gereklidir.'" "$PLIST" 2>/dev/null || true
 
-          # Bonjour servisleri (iOS 14+ yerel ağ keşfi)
+          # Bonjour (yerel ağ keşfi)
           /usr/libexec/PlistBuddy -c "Add :NSBonjourServices array" "$PLIST" 2>/dev/null || true
           /usr/libexec/PlistBuddy -c "Add :NSBonjourServices:0 string '_http._tcp'" "$PLIST" 2>/dev/null || true
 
-          # Bildirim izni (flutter_local_notifications)
+          # Arka plan bildirimleri
           /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes array" "$PLIST" 2>/dev/null || true
           /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes:0 string 'fetch'" "$PLIST" 2>/dev/null || true
 
-          # Uygulama görünen adı
+          # Uygulama adı
           /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName PetFeeder" "$PLIST" 2>/dev/null || true
-
-          echo "--- Info.plist ---"
-          cat "$PLIST"
 
       - name: iOS release build (imzasız)
         script: |
           cd mobile
-          flutter build ios --release --no-codesign
+
+          # flutter build --no-codesign bazen imza hatası verse de Runner.app oluşur
+          flutter build ios --release --no-codesign || true
+
+          # Runner.app var mı kontrol et
+          APP="build/ios/iphoneos/Runner.app"
+          if [ ! -d "$APP" ]; then
+            echo "Runner.app bulunamadı, xcodebuild ile deneniyor..."
+            xcodebuild \
+              -workspace ios/Runner.xcworkspace \
+              -scheme Runner \
+              -configuration Release \
+              -destination generic/platform=iOS \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGN_IDENTITY="" \
+              DEVELOPMENT_TEAM="" \
+              CONFIGURATION_BUILD_DIR="$(pwd)/build/ios/iphoneos" \
+              build
+          fi
+
+          # Son kontrol
+          if [ -d "$APP" ]; then
+            echo "✓ Runner.app oluşturuldu: $(du -sh "$APP" | cut -f1)"
+          else
+            echo "✗ Runner.app bulunamadı!"
+            exit 1
+          fi
 
       - name: IPA paketle
         script: |
@@ -57,7 +91,7 @@ workflows:
           cp -r "mobile/build/ios/iphoneos/Runner.app" "mobile/build/ios/ipa/Payload/"
           cd mobile/build/ios/ipa
           zip -r PetFeeder.ipa Payload
-          echo "IPA oluşturuldu: $(du -sh PetFeeder.ipa)"
+          echo "✓ IPA oluşturuldu: $(du -sh PetFeeder.ipa)"
 
     artifacts:
       - mobile/build/ios/ipa/PetFeeder.ipa
