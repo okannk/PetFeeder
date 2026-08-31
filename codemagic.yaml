@@ -19,79 +19,83 @@ workflows:
           if [ ! -d "ios" ]; then
             flutter create . --platforms=ios --org com.okan --project-name petfeeder
           fi
+          # CocoaPods
+          cd ios && pod install --repo-update && cd ..
 
       - name: Kod imzalamayı devre dışı bırak
         script: |
           PBXPROJ="mobile/ios/Runner.xcodeproj/project.pbxproj"
-          # Tüm DEVELOPMENT_TEAM değerlerini boşalt
           sed -i '' 's/DEVELOPMENT_TEAM = [^;]*;/DEVELOPMENT_TEAM = "";/g' "$PBXPROJ"
-          # CODE_SIGNING_REQUIRED = NO
           sed -i '' 's/CODE_SIGNING_REQUIRED = [^;]*;/CODE_SIGNING_REQUIRED = NO;/g' "$PBXPROJ"
           sed -i '' 's/CODE_SIGNING_ALLOWED = [^;]*;/CODE_SIGNING_ALLOWED = NO;/g' "$PBXPROJ"
-          echo "pbxproj güncellendi."
+          echo "Signing devre dışı bırakıldı."
 
-      - name: Info.plist — izinler ve ağ ayarları
+      - name: Info.plist — izinler
         script: |
           PLIST="mobile/ios/Runner/Info.plist"
 
-          # Yerel HTTP (backend + kurulum AP'si 192.168.4.1)
           /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" "$PLIST" 2>/dev/null || true
           /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool YES" "$PLIST" 2>/dev/null || true
           /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsLocalNetworking bool YES" "$PLIST" 2>/dev/null || true
-
-          # iOS 14+ yerel ağ izni
-          /usr/libexec/PlistBuddy -c "Add :NSLocalNetworkUsageDescription string 'PetFeeder cihazini yerel ag uzerinden kurmak ve yonetmek icin gereklidir.'" "$PLIST" 2>/dev/null || true
-
-          # Bonjour (yerel ağ keşfi)
+          /usr/libexec/PlistBuddy -c "Add :NSLocalNetworkUsageDescription string 'PetFeeder cihazini yerel ag uzerinden kurmak icin gereklidir.'" "$PLIST" 2>/dev/null || true
           /usr/libexec/PlistBuddy -c "Add :NSBonjourServices array" "$PLIST" 2>/dev/null || true
           /usr/libexec/PlistBuddy -c "Add :NSBonjourServices:0 string '_http._tcp'" "$PLIST" 2>/dev/null || true
-
-          # Arka plan bildirimleri
           /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes array" "$PLIST" 2>/dev/null || true
           /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes:0 string 'fetch'" "$PLIST" 2>/dev/null || true
-
-          # Uygulama adı
           /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName PetFeeder" "$PLIST" 2>/dev/null || true
 
-      - name: iOS release build (imzasız)
+      - name: Flutter Dart kodu üret
         script: |
           cd mobile
+          # Dart → native bridge dosyalarını üret (build için gerekli)
+          flutter build ios --release --no-codesign 2>&1 || true
 
-          # flutter build --no-codesign bazen imza hatası verse de Runner.app oluşur
-          flutter build ios --release --no-codesign || true
+      - name: xcodebuild ile tam build al
+        script: |
+          cd mobile
+          SYMROOT="$(pwd)/build/ios/Release"
 
-          # Runner.app var mı kontrol et
-          APP="build/ios/iphoneos/Runner.app"
-          if [ ! -d "$APP" ]; then
-            echo "Runner.app bulunamadı, xcodebuild ile deneniyor..."
-            xcodebuild \
-              -workspace ios/Runner.xcworkspace \
-              -scheme Runner \
-              -configuration Release \
-              -destination generic/platform=iOS \
-              CODE_SIGNING_ALLOWED=NO \
-              CODE_SIGNING_REQUIRED=NO \
-              CODE_SIGN_IDENTITY="" \
-              DEVELOPMENT_TEAM="" \
-              CONFIGURATION_BUILD_DIR="$(pwd)/build/ios/iphoneos" \
-              build
-          fi
+          xcodebuild \
+            -workspace ios/Runner.xcworkspace \
+            -scheme Runner \
+            -configuration Release \
+            -sdk iphoneos \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            SYMROOT="$SYMROOT" \
+            build
 
-          # Son kontrol
-          if [ -d "$APP" ]; then
-            echo "✓ Runner.app oluşturuldu: $(du -sh "$APP" | cut -f1)"
-          else
-            echo "✗ Runner.app bulunamadı!"
+          # Runner.app'ı bul
+          APP=$(find "$SYMROOT" -name "Runner.app" -type d | head -1)
+          echo "Runner.app: $APP"
+
+          if [ -z "$APP" ] || [ ! -f "$APP/Info.plist" ]; then
+            echo "ERROR: Runner.app veya Info.plist bulunamadı!"
+            find "$SYMROOT" -type f | head -30
             exit 1
           fi
+
+          # Standart konuma kopyala
+          mkdir -p build/ios/iphoneos
+          cp -r "$APP" build/ios/iphoneos/Runner.app
+          echo "✓ Runner.app hazır: $(du -sh build/ios/iphoneos/Runner.app | cut -f1)"
 
       - name: IPA paketle
         script: |
           mkdir -p mobile/build/ios/ipa/Payload
           cp -r "mobile/build/ios/iphoneos/Runner.app" "mobile/build/ios/ipa/Payload/"
+
+          # Info.plist kontrolü
+          if [ ! -f "mobile/build/ios/ipa/Payload/Runner.app/Info.plist" ]; then
+            echo "ERROR: Payload/Runner.app/Info.plist eksik!"
+            exit 1
+          fi
+
           cd mobile/build/ios/ipa
           zip -r PetFeeder.ipa Payload
-          echo "✓ IPA oluşturuldu: $(du -sh PetFeeder.ipa)"
+          echo "✓ IPA: $(du -sh PetFeeder.ipa)"
 
     artifacts:
       - mobile/build/ios/ipa/PetFeeder.ipa
