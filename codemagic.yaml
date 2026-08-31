@@ -49,31 +49,44 @@ workflows:
           cd mobile
           flutter build ios --release --no-codesign || true
 
-          # Flutter'ın Xcode derleme çıktısı (post-build script çalışmasa da burası dolu)
-          APP="build/ios/Release-iphoneos/Runner.app"
+          # Flutter wrapper exit 1 verir ama Xcode build tamamlandı.
+          # Tam Runner.app (Runner binary dahil) DerivedData'da duruyor.
+          DERIVED=$(find ~/Library/Developer/Xcode/DerivedData \
+            -name "Runner.app" \
+            -path "*/Release-iphoneos/*" \
+            ! -path "*/Index.noindex/*" \
+            2>/dev/null | head -1)
 
-          if [ ! -d "$APP" ]; then
-            echo "ERROR: Runner.app hiç oluşmadı. Tüm build dizini:"
-            find build -name "Runner.app" -type d 2>/dev/null
-            exit 1
+          echo "DerivedData Runner.app: $DERIVED"
+
+          if [ -n "$DERIVED" ] && [ -f "$DERIVED/Runner" ]; then
+            echo "✓ DerivedData'da tam Runner.app bulundu"
+            mkdir -p build/ios/iphoneos
+            cp -r "$DERIVED" build/ios/iphoneos/Runner.app
+          else
+            # Yerel build dizinini de dene
+            LOCAL=$(find build/ios -name "Runner.app" -type d 2>/dev/null | head -1)
+            echo "Yerel Runner.app: $LOCAL"
+            if [ -n "$LOCAL" ] && [ -f "$LOCAL/Runner" ]; then
+              echo "✓ Yerel build'de Runner.app bulundu"
+              mkdir -p build/ios/iphoneos
+              cp -r "$LOCAL" build/ios/iphoneos/Runner.app
+            else
+              echo "ERROR: Runner binary içeren Runner.app bulunamadı!"
+              echo "--- DerivedData taraması ---"
+              find ~/Library/Developer/Xcode/DerivedData -name "Runner" -not -name "*.app" 2>/dev/null | head -10
+              echo "--- build/ios taraması ---"
+              find build/ios -name "Runner" -not -name "*.app" 2>/dev/null | head -10
+              exit 1
+            fi
           fi
 
-          # Post-build script signing hatasıyla durduysa Info.plist eksik olabilir
-          # Kaynak Info.plist'i (PlistBuddy ile zaten düzeltilmiş) bundle'a kopyala
-          if [ ! -f "$APP/Info.plist" ]; then
-            echo "Info.plist eksik — ios/Runner/Info.plist kaynağından kopyalanıyor..."
-            cp ios/Runner/Info.plist "$APP/Info.plist"
-            echo "✓ Info.plist kopyalandı"
-          fi
-
-          echo "✓ Runner.app hazır: $(du -sh $APP | cut -f1)"
-          ls -la "$APP/"
+          echo "✓ Runner.app: $(du -sh build/ios/iphoneos/Runner.app | cut -f1)"
 
       - name: IPA paketle
         script: |
-          APP="mobile/build/ios/Release-iphoneos/Runner.app"
           mkdir -p mobile/build/ios/ipa/Payload
-          cp -r "$APP" mobile/build/ios/ipa/Payload/
+          cp -r "mobile/build/ios/iphoneos/Runner.app" "mobile/build/ios/ipa/Payload/"
           cd mobile/build/ios/ipa
           zip -r PetFeeder.ipa Payload
           echo "✓ IPA: $(du -sh PetFeeder.ipa)"
