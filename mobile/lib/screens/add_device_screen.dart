@@ -50,7 +50,7 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
         icon: Icons.power_settings_new,
         color: Colors.orange,
         title: 'Cihazı Güce Tak',
-        body: 'PetFeeder'i prize tak. LED hızlı yanıp sönmeye başlayacak — '
+        body: "PetFeeder'i prize tak. LED hızlı yanıp sönmeye başlayacak — "
             'bu kurulum modunda olduğunu gösterir.',
         next: () => setState(() => _step = 1),
         nextLabel: 'Bağlandım, Devam',
