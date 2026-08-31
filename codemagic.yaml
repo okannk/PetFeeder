@@ -1,0 +1,56 @@
+workflows:
+  petfeeder-ios:
+    name: PetFeeder iOS (İmzasız IPA)
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+
+    environment:
+      flutter: stable
+
+    scripts:
+      - name: Flutter bağımlılıkları kur
+        script: |
+          cd mobile
+          flutter pub get
+
+      - name: iOS platform klasörünü oluştur
+        script: |
+          cd mobile
+          # ios/ klasörü repo'da yoksa flutter create ile üret
+          if [ ! -d "ios" ]; then
+            flutter create . --platforms=ios --org com.okan --project-name petfeeder
+          fi
+
+      - name: Info.plist — yerel HTTP ve ağ izinleri
+        script: |
+          PLIST="mobile/ios/Runner/Info.plist"
+
+          # NSAppTransportSecurity — yerel HTTP sunucusuna (backend) izin ver
+          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" "$PLIST" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool YES" "$PLIST" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsLocalNetworking bool YES" "$PLIST" 2>/dev/null || true
+
+          # iOS 14+ yerel ağ kullanım açıklaması
+          /usr/libexec/PlistBuddy -c "Add :NSLocalNetworkUsageDescription string 'PetFeeder cihazina yerel ag uzerinden baglanmak icin gereklidir.'" "$PLIST" 2>/dev/null || true
+
+          # Uygulama görünen adı
+          /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName PetFeeder" "$PLIST" 2>/dev/null || true
+
+          echo "--- Info.plist kontrol ---"
+          cat "$PLIST"
+
+      - name: iOS release build (imzasız)
+        script: |
+          cd mobile
+          flutter build ios --release --no-codesign
+
+      - name: IPA paketle
+        script: |
+          mkdir -p mobile/build/ios/ipa/Payload
+          cp -r "mobile/build/ios/iphoneos/Runner.app" "mobile/build/ios/ipa/Payload/"
+          cd mobile/build/ios/ipa
+          zip -r PetFeeder.ipa Payload
+          echo "IPA oluşturuldu: $(du -sh PetFeeder.ipa)"
+
+    artifacts:
+      - mobile/build/ios/ipa/PetFeeder.ipa

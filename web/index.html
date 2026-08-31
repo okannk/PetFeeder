@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PetFeeder Paneli</title>
+<style>
+  :root {
+    --bg: #f4f6f8;
+    --card: #ffffff;
+    --text: #1f2933;
+    --muted: #6b7785;
+    --accent: #2f7d5f;
+    --accent-dark: #235f47;
+    --danger: #c0392b;
+    --border: #e2e6ea;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+  }
+  header {
+    padding: 20px 24px;
+    background: var(--accent);
+    color: white;
+  }
+  header h1 { margin: 0; font-size: 20px; }
+  header p { margin: 4px 0 0; opacity: .85; font-size: 13px; }
+  main {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 20px 16px 60px;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 18px;
+    margin-bottom: 16px;
+  }
+  .device-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .device-header h2 { margin: 0; font-size: 16px; }
+  .status {
+    font-size: 12px;
+    padding: 3px 9px;
+    border-radius: 999px;
+    font-weight: 600;
+  }
+  .status.online { background: #e3f5ec; color: var(--accent-dark); }
+  .status.offline { background: #fbeaea; color: var(--danger); }
+  .muted { color: var(--muted); font-size: 12px; margin: 4px 0 12px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+  button {
+    cursor: pointer;
+    border: none;
+    border-radius: 7px;
+    padding: 8px 14px;
+    font-size: 13px;
+    font-weight: 600;
+    background: var(--accent);
+    color: white;
+  }
+  button:hover { background: var(--accent-dark); }
+  button.secondary { background: #edf1f3; color: var(--text); }
+  button.secondary:hover { background: #dfe4e8; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  input[type="number"], input[type="text"] {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-size: 13px;
+    width: 64px;
+  }
+  input[type="text"] { width: 160px; }
+  label.inline { font-size: 13px; display: flex; align-items: center; gap: 6px; }
+  .schedule-slot {
+    border-top: 1px solid var(--border);
+    padding-top: 10px;
+    margin-top: 10px;
+  }
+  .schedule-slot h3 { margin: 0 0 8px; font-size: 13px; color: var(--muted); font-weight: 600; }
+  .history { font-size: 12px; color: var(--muted); margin-top: 10px; }
+  .history div { padding: 3px 0; border-bottom: 1px dashed var(--border); }
+  .add-device { display: flex; gap: 8px; }
+  .empty { text-align: center; color: var(--muted); padding: 30px 0; }
+  .toast {
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--text);
+    color: white;
+    padding: 10px 18px;
+    border-radius: 8px;
+    font-size: 13px;
+    opacity: 0;
+    transition: opacity .2s;
+    pointer-events: none;
+    max-width: 90%;
+    text-align: center;
+  }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🐾 PetFeeder Paneli</h1>
+  <p>Cihazları izle, anında besle, zamanlama ayarla.</p>
+</header>
+<main>
+  <div class="card">
+    <div class="add-device">
+      <input id="newDeviceName" type="text" placeholder="Cihaz adı (örn. Mutfak)" />
+      <button id="addDeviceBtn">+ Cihaz Ekle</button>
+    </div>
+  </div>
+
+  <div id="devices"></div>
+  <div id="empty" class="empty" style="display:none">Henüz cihaz yok. Yukarıdan bir tane ekle.</div>
+</main>
+<div id="toast" class="toast"></div>
+
+<script>
+const API = '';
+
+function toast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => el.classList.remove('show'), 3500);
+}
+
+async function api(path, opts) {
+  const res = await fetch(API + path, {
+    headers: { 'Content-Type': 'application/json' },
+    ...opts,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `İstek başarısız (${res.status})`);
+  return data;
+}
+
+async function loadDevices() {
+  let devices;
+  try {
+    devices = await api('/api/devices');
+  } catch (err) {
+    toast('Cihazlar yüklenemedi: ' + err.message);
+    return;
+  }
+
+  const container = document.getElementById('devices');
+  document.getElementById('empty').style.display = devices.length ? 'none' : 'block';
+  container.innerHTML = '';
+
+  for (const device of devices) {
+    let history = [];
+    try { history = await api(`/api/devices/${device.id}/history?limit=5`); } catch (_) {}
+    container.appendChild(renderDeviceCard(device, history));
+  }
+}
+
+function slotFields(slot, prefix) {
+  return `
+    <div class="row">
+      <label class="inline"><input type="checkbox" data-role="enabled" ${slot.enabled ? 'checked' : ''}/> Aktif</label>
+      <label class="inline">Saat <input type="number" min="0" max="23" data-role="hour" value="${slot.hour}"/></label>
+      <label class="inline">Dakika <input type="number" min="0" max="59" data-role="minute" value="${slot.minute}"/></label>
+      <label class="inline">Porsiyon <input type="number" min="1" max="10" data-role="portions" value="${slot.portions}"/></label>
+    </div>`;
+}
+
+function renderDeviceCard(device, history) {
+  const el = document.createElement('div');
+  el.className = 'card';
+  const lastSeen = device.lastSeenAt ? new Date(device.lastSeenAt).toLocaleString('tr-TR') : 'hiç';
+
+  el.innerHTML = `
+    <div class="device-header">
+      <h2>${device.name}</h2>
+      <span class="status ${device.online ? 'online' : 'offline'}">${device.online ? 'Çevrimiçi' : 'Çevrimdışı'}</span>
+    </div>
+    <p class="muted">Son görülme: ${lastSeen}</p>
+
+    <div class="row">
+      <label class="inline">Porsiyon <input type="number" min="1" max="10" value="1" data-role="feedPortions"/></label>
+      <button data-action="feed" ${device.online ? '' : 'disabled'}>🍽 Şimdi Besle</button>
+    </div>
+
+    <div class="schedule-slot" data-slot="morning">
+      <h3>🌅 Sabah beslemesi</h3>
+      ${slotFields(device.schedule.morning, 'morning')}
+    </div>
+    <div class="schedule-slot" data-slot="evening">
+      <h3>🌙 Akşam beslemesi</h3>
+      ${slotFields(device.schedule.evening, 'evening')}
+    </div>
+    <div class="row">
+      <button data-action="save-schedule" class="secondary">Zamanlamayı Kaydet</button>
+    </div>
+
+    <div class="history">
+      ${history.length ? history.map(h => `<div>${new Date(h.ts).toLocaleString('tr-TR')} — ${h.message || h.status}</div>`).join('') : '<div>Henüz besleme kaydı yok.</div>'}
+    </div>
+  `;
+
+  el.querySelector('[data-action="feed"]').addEventListener('click', async (e) => {
+    const btn = e.target;
+    const portions = Number(el.querySelector('[data-role="feedPortions"]').value) || 1;
+    btn.disabled = true;
+    btn.textContent = 'Besleniyor...';
+    try {
+      const result = await api(`/api/devices/${device.id}/feed`, {
+        method: 'POST',
+        body: JSON.stringify({ portions }),
+      });
+      toast(result.message || 'Besleme tamamlandı.');
+    } catch (err) {
+      toast('Besleme başarısız: ' + err.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '🍽 Şimdi Besle';
+      loadDevices();
+    }
+  });
+
+  el.querySelector('[data-action="save-schedule"]').addEventListener('click', async (e) => {
+    const readSlot = (name) => {
+      const slot = el.querySelector(`[data-slot="${name}"]`);
+      return {
+        enabled: slot.querySelector('[data-role="enabled"]').checked,
+        hour: Number(slot.querySelector('[data-role="hour"]').value),
+        minute: Number(slot.querySelector('[data-role="minute"]').value),
+        portions: Number(slot.querySelector('[data-role="portions"]').value),
+      };
+    };
+    try {
+      await api(`/api/devices/${device.id}/schedule`, {
+        method: 'POST',
+        body: JSON.stringify({ morning: readSlot('morning'), evening: readSlot('evening') }),
+      });
+      toast('Zamanlama kaydedildi.');
+    } catch (err) {
+      toast('Kaydedilemedi: ' + err.message);
+    }
+  });
+
+  return el;
+}
+
+document.getElementById('addDeviceBtn').addEventListener('click', async () => {
+  const input = document.getElementById('newDeviceName');
+  const name = input.value.trim();
+  if (!name) { toast('Cihaz adı gir.'); return; }
+  try {
+    const device = await api('/api/devices', { method: 'POST', body: JSON.stringify({ name }) });
+    input.value = '';
+    prompt('Cihaz oluşturuldu. Bu token bir daha gösterilmeyecek — kopyalayıp cihazın kurulum portaline yapıştır:', device.token);
+    loadDevices();
+  } catch (err) {
+    toast('Cihaz eklenemedi: ' + err.message);
+  }
+});
+
+loadDevices();
+setInterval(loadDevices, 5000);
+</script>
+</body>
+</html>

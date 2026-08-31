@@ -1,0 +1,24 @@
+/*
+ * config.h.example — PetFeeder ESP8266 Yapilandirma Ornegi
+ *
+ * Bu dosyayi "config.h" olarak kopyala ve kendi degerlerinle doldur.
+ * config.h asla repoya/paylasima girmemeli (bkz. .gitignore).
+ *
+ * NOT: WiFi SSID/sifresi burada YOK — cihaz ilk acildiginda
+ * "PetFeeder-Setup" adinda bir kurulum agi acar, WiFi bilgisi
+ * o portaldan girilir ve cihaz uzerinde saklanir.
+ */
+#pragma once
+
+// Backend WebSocket sunucusu — ilk kurulum varsayılanı (portalden değiştirilebilir)
+#define BACKEND_HOST_DEFAULT   "192.168.1.10"
+#define BACKEND_PORT_DEFAULT   "3001"
+
+// Cihaz token (POST /api/devices ile backend'de oluşturulur)
+#define DEVICE_TOKEN_DEFAULT   "CHANGE_ME_DEVICE_TOKEN"
+
+// OTA (kablosuz firmware güncelleme) şifresi
+#define OTA_PASSWORD            "CHANGE_ME_OTA_PASSWORD"
+
+// Cihazın ilk açılışta oluşturduğu kurulum ağının şifresi (en az 8 karakter)
+#define SETUP_AP_PASSWORD       "CHANGE_ME_SETUP_PASSWORD"
