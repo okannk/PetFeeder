@@ -44,55 +44,24 @@ workflows:
           /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes:0 string 'fetch'" "$PLIST" 2>/dev/null || true
           /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName PetFeeder" "$PLIST" 2>/dev/null || true
 
-      - name: Flutter Dart kodu üret
+      - name: iOS release build (imzasız)
         script: |
           cd mobile
-          # Dart → native bridge dosyalarını üret (build için gerekli)
-          flutter build ios --release --no-codesign 2>&1 || true
+          flutter build ios --release --no-codesign || true
 
-      - name: xcodebuild ile tam build al
-        script: |
-          cd mobile
-          SYMROOT="$(pwd)/build/ios/Release"
-
-          xcodebuild \
-            -workspace ios/Runner.xcworkspace \
-            -scheme Runner \
-            -configuration Release \
-            -sdk iphoneos \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            DEVELOPMENT_TEAM="" \
-            SYMROOT="$SYMROOT" \
-            build
-
-          # Runner.app'ı bul
-          APP=$(find "$SYMROOT" -name "Runner.app" -type d | head -1)
-          echo "Runner.app: $APP"
-
-          if [ -z "$APP" ] || [ ! -f "$APP/Info.plist" ]; then
-            echo "ERROR: Runner.app veya Info.plist bulunamadı!"
-            find "$SYMROOT" -type f | head -30
+          APP="build/ios/iphoneos/Runner.app"
+          if [ ! -f "$APP/Info.plist" ]; then
+            echo "ERROR: $APP/Info.plist bulunamadı — mevcut dosyalar:"
+            find build -name "Info.plist" 2>/dev/null | head -10
+            find build -name "Runner.app" -type d 2>/dev/null | head -5
             exit 1
           fi
-
-          # Standart konuma kopyala
-          mkdir -p build/ios/iphoneos
-          cp -r "$APP" build/ios/iphoneos/Runner.app
-          echo "✓ Runner.app hazır: $(du -sh build/ios/iphoneos/Runner.app | cut -f1)"
+          echo "✓ Runner.app hazır: $(du -sh $APP | cut -f1)"
 
       - name: IPA paketle
         script: |
           mkdir -p mobile/build/ios/ipa/Payload
           cp -r "mobile/build/ios/iphoneos/Runner.app" "mobile/build/ios/ipa/Payload/"
-
-          # Info.plist kontrolü
-          if [ ! -f "mobile/build/ios/ipa/Payload/Runner.app/Info.plist" ]; then
-            echo "ERROR: Payload/Runner.app/Info.plist eksik!"
-            exit 1
-          fi
-
           cd mobile/build/ios/ipa
           zip -r PetFeeder.ipa Payload
           echo "✓ IPA: $(du -sh PetFeeder.ipa)"
