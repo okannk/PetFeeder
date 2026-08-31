@@ -25,10 +25,27 @@ workflows:
       - name: Kod imzalamayı devre dışı bırak
         script: |
           PBXPROJ="mobile/ios/Runner.xcodeproj/project.pbxproj"
-          sed -i '' 's/DEVELOPMENT_TEAM = [^;]*;/DEVELOPMENT_TEAM = "";/g' "$PBXPROJ"
+
+          # Flutter pre-check için DEVELOPMENT_TEAM boş olmayan sahte değer gerekiyor.
+          # Boş bırakılırsa Flutter build'i hiç başlatmıyor (--no-codesign ile bile).
+          # "LOCAL0BUILD" formatı geçerli ama var olmayan bir Team ID — gerçek signing olmaz.
+          sed -i '' 's/DEVELOPMENT_TEAM = [^;]*;/DEVELOPMENT_TEAM = "LOCAL0BUILD";/g' "$PBXPROJ"
+
+          # DEVELOPMENT_TEAM hiç yoksa ekle
+          if ! grep -q "DEVELOPMENT_TEAM" "$PBXPROJ"; then
+            sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET/DEVELOPMENT_TEAM = "LOCAL0BUILD";\n\t\t\t\tIPHONEOS_DEPLOYMENT_TARGET/g' "$PBXPROJ"
+            echo "DEVELOPMENT_TEAM eklendi"
+          fi
+
+          # Auto-signing kapat — sahte Team ID ile provisioning profile arama (başarısız olur)
+          sed -i '' 's/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g' "$PBXPROJ"
+
+          # Gerçek code signing kapat
           sed -i '' 's/CODE_SIGNING_REQUIRED = [^;]*;/CODE_SIGNING_REQUIRED = NO;/g' "$PBXPROJ"
           sed -i '' 's/CODE_SIGNING_ALLOWED = [^;]*;/CODE_SIGNING_ALLOWED = NO;/g' "$PBXPROJ"
-          echo "Signing devre dışı bırakıldı."
+
+          echo "Signing yapılandırması:"
+          grep -E "DEVELOPMENT_TEAM|CODE_SIGNING|ProvisioningStyle" "$PBXPROJ" | head -15
 
       - name: Info.plist — izinler
         script: |
