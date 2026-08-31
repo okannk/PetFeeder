@@ -1,61 +1,54 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../models/device.dart';
-import 'settings_service.dart';
 
+/// ESP8266'ya direkt HTTP konuşur.
+/// Backend yok, API key yok.
 class ApiService {
-  static const _timeout = Duration(seconds: 8);
-  static const _feedTimeout = Duration(seconds: 20);
+  static const _timeout     = Duration(seconds: 8);
+  static const _feedTimeout = Duration(seconds: 25);
 
-  Future<Map<String, String>> _headers() async {
-    final key = await SettingsService.getApiKey();
-    return {
-      'Content-Type': 'application/json',
-      if (key.isNotEmpty) 'X-Api-Key': key,
-    };
-  }
+  String _url(String host, String path) => 'http://$host$path';
 
-  Future<String> _base() => SettingsService.getBaseUrl();
-
-  Future<List<Device>> fetchDevices() async {
+  Future<DeviceStatus> fetchStatus(String host) async {
     final resp = await http
-        .get(Uri.parse('${await _base()}/api/devices'), headers: await _headers())
+        .get(Uri.parse(_url(host, '/status')))
         .timeout(_timeout);
-    if (resp.statusCode != 200) throw Exception('Sunucu hatası: ${resp.statusCode}');
-    return (jsonDecode(resp.body) as List)
-        .map((e) => Device.fromJson(e as Map<String, dynamic>))
-        .toList();
+    if (resp.statusCode != 200) throw Exception('Durum alınamadı: ${resp.statusCode}');
+    return DeviceStatus.fromJson(jsonDecode(resp.body) as Map<String, dynamic>);
   }
 
-  Future<Map<String, dynamic>> createDevice(String name) async {
+  Future<Map<String, dynamic>> feed(String host, int portions) async {
     final resp = await http
-        .post(Uri.parse('${await _base()}/api/devices'),
-            headers: await _headers(), body: jsonEncode({'name': name}))
+        .post(Uri.parse(_url(host, '/feed')),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'portions': portions}))
+        .timeout(_feedTimeout);
+    final body = jsonDecode(resp.body) as Map<String, dynamic>;
+    if (resp.statusCode != 200) throw Exception(body['error'] ?? 'Besleme başarısız');
+    return body;
+  }
+
+  Future<Schedule> fetchSchedule(String host) async {
+    final resp = await http
+        .get(Uri.parse(_url(host, '/schedule')))
         .timeout(_timeout);
-    if (resp.statusCode != 201) throw Exception('Cihaz oluşturulamadı: ${resp.statusCode}');
-    return jsonDecode(resp.body) as Map<String, dynamic>;
+    if (resp.statusCode != 200) throw Exception('Zamanlama alınamadı: ${resp.statusCode}');
+    return Schedule.fromJson(jsonDecode(resp.body) as Map<String, dynamic>);
   }
 
-  Future<Device> renameDevice(String id, String name) async {
+  Future<void> updateSchedule(String host, Schedule schedule) async {
     final resp = await http
-        .patch(Uri.parse('${await _base()}/api/devices/$id'),
-            headers: await _headers(), body: jsonEncode({'name': name}))
+        .post(Uri.parse(_url(host, '/schedule')),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode(schedule.toJson()))
         .timeout(_timeout);
-    if (resp.statusCode != 200) throw Exception('Yeniden adlandırma başarısız: ${resp.statusCode}');
-    return Device.fromJson(jsonDecode(resp.body) as Map<String, dynamic>);
+    if (resp.statusCode != 200) throw Exception('Zamanlama kaydedilemedi: ${resp.statusCode}');
   }
 
-  Future<void> deleteDevice(String id) async {
+  Future<List<HistoryEntry>> fetchHistory(String host) async {
     final resp = await http
-        .delete(Uri.parse('${await _base()}/api/devices/$id'), headers: await _headers())
-        .timeout(_timeout);
-    if (resp.statusCode != 200) throw Exception('Silme başarısız: ${resp.statusCode}');
-  }
-
-  Future<List<HistoryEntry>> fetchHistory(String deviceId, {int limit = 50}) async {
-    final resp = await http
-        .get(Uri.parse('${await _base()}/api/devices/$deviceId/history?limit=$limit'),
-            headers: await _headers())
+        .get(Uri.parse(_url(host, '/history')))
         .timeout(_timeout);
     if (resp.statusCode != 200) throw Exception('Geçmiş alınamadı: ${resp.statusCode}');
     return (jsonDecode(resp.body) as List)
@@ -63,21 +56,40 @@ class ApiService {
         .toList();
   }
 
-  Future<Map<String, dynamic>> feed(String deviceId, int portions) async {
+  Future<void> renameDevice(String host, String name) async {
     final resp = await http
-        .post(Uri.parse('${await _base()}/api/devices/$deviceId/feed'),
-            headers: await _headers(), body: jsonEncode({'portions': portions}))
-        .timeout(_feedTimeout);
-    final body = jsonDecode(resp.body) as Map<String, dynamic>;
-    if (resp.statusCode != 200) throw Exception(body['error'] ?? 'Besleme başarısız');
-    return body;
+        .post(Uri.parse(_url(host, '/name')),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'name': name}))
+        .timeout(_timeout);
+    if (resp.statusCode != 200) throw Exception('Yeniden adlandırma başarısız: ${resp.statusCode}');
   }
 
-  Future<void> updateSchedule(String deviceId, Schedule schedule) async {
-    final resp = await http
-        .post(Uri.parse('${await _base()}/api/devices/$deviceId/schedule'),
-            headers: await _headers(), body: jsonEncode(schedule.toJson()))
+  Future<void> resetDevice(String host) async {
+    await http
+        .post(Uri.parse(_url(host, '/reset')),
+            headers: {'Content-Type': 'application/json'})
         .timeout(_timeout);
-    if (resp.statusCode != 200) throw Exception('Zamanlama kaydedilemedi: ${resp.statusCode}');
+  }
+
+  /// Setup AP modu: 192.168.4.1/info
+  Future<Map<String, dynamic>> fetchDeviceInfo() async {
+    final resp = await http
+        .get(Uri.parse('http://192.168.4.1/info'))
+        .timeout(_timeout);
+    if (resp.statusCode != 200) throw Exception('Cihaz bilgisi alınamadı');
+    return jsonDecode(resp.body) as Map<String, dynamic>;
+  }
+
+  /// Setup AP modu: WiFi bilgilerini ESP'ye gönder
+  Future<Map<String, dynamic>> configureDevice(
+      String ssid, String password, String name) async {
+    final resp = await http
+        .post(Uri.parse('http://192.168.4.1/configure'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'ssid': ssid, 'password': password, 'name': name}))
+        .timeout(_timeout);
+    if (resp.statusCode != 200) throw Exception('Yapılandırma gönderilemedi: ${resp.statusCode}');
+    return jsonDecode(resp.body) as Map<String, dynamic>;
   }
 }

@@ -1,3 +1,5 @@
+// Cihaz modelleri — backend yok, ESP'ye direkt HTTP
+
 class ScheduleSlot {
   final String id;
   final String label;
@@ -33,7 +35,8 @@ class ScheduleSlot {
         'portions': portions,
       };
 
-  ScheduleSlot copyWith({bool? enabled, int? hour, int? minute, int? portions}) => ScheduleSlot(
+  ScheduleSlot copyWith({bool? enabled, int? hour, int? minute, int? portions}) =>
+      ScheduleSlot(
         id: id,
         label: label,
         enabled: enabled ?? this.enabled,
@@ -47,82 +50,95 @@ class Schedule {
   final List<ScheduleSlot> slots;
   const Schedule({required this.slots});
 
-  static List<ScheduleSlot> _defaultSlots() => [
-        const ScheduleSlot(id: 'slot1', label: 'Sabah', enabled: false, hour: 8, minute: 0, portions: 1),
-        const ScheduleSlot(id: 'slot2', label: 'Öğle', enabled: false, hour: 12, minute: 0, portions: 1),
+  static List<ScheduleSlot> _defaults() => [
+        const ScheduleSlot(id: 'slot1', label: 'Sabah', enabled: false, hour: 8,  minute: 0, portions: 1),
+        const ScheduleSlot(id: 'slot2', label: 'Öğle',  enabled: false, hour: 12, minute: 0, portions: 1),
         const ScheduleSlot(id: 'slot3', label: 'Akşam', enabled: false, hour: 18, minute: 0, portions: 1),
-        const ScheduleSlot(id: 'slot4', label: 'Gece', enabled: false, hour: 22, minute: 0, portions: 1),
+        const ScheduleSlot(id: 'slot4', label: 'Gece',  enabled: false, hour: 22, minute: 0, portions: 1),
       ];
 
-  factory Schedule.fromJson(Map<String, dynamic>? j) {
-    if (j == null) return Schedule(slots: _defaultSlots());
-
-    // Yeni slots formatı
-    if (j['slots'] is List) {
-      final slots = (j['slots'] as List)
-          .map((s) => ScheduleSlot.fromJson(s as Map<String, dynamic>))
-          .toList();
-      return Schedule(slots: slots);
+  factory Schedule.fromJson(dynamic j) {
+    if (j == null) return Schedule(slots: _defaults());
+    if (j is List) {
+      return Schedule(slots: j.map((s) => ScheduleSlot.fromJson(s as Map<String, dynamic>)).toList());
     }
-
-    // Eski morning/evening formatı — migrate et
-    final m = j['morning'] as Map<String, dynamic>?;
-    final e = j['evening'] as Map<String, dynamic>?;
-    return Schedule(slots: [
-      ScheduleSlot(id: 'slot1', label: 'Sabah', enabled: m?['enabled'] as bool? ?? false, hour: m?['hour'] as int? ?? 8, minute: m?['minute'] as int? ?? 0, portions: m?['portions'] as int? ?? 1),
-      const ScheduleSlot(id: 'slot2', label: 'Öğle', enabled: false, hour: 12, minute: 0, portions: 1),
-      ScheduleSlot(id: 'slot3', label: 'Akşam', enabled: e?['enabled'] as bool? ?? false, hour: e?['hour'] as int? ?? 18, minute: e?['minute'] as int? ?? 0, portions: e?['portions'] as int? ?? 1),
-      const ScheduleSlot(id: 'slot4', label: 'Gece', enabled: false, hour: 22, minute: 0, portions: 1),
-    ]);
+    if (j is Map<String, dynamic> && j['slots'] is List) {
+      return Schedule(
+          slots: (j['slots'] as List)
+              .map((s) => ScheduleSlot.fromJson(s as Map<String, dynamic>))
+              .toList());
+    }
+    return Schedule(slots: _defaults());
   }
 
   Map<String, dynamic> toJson() => {'slots': slots.map((s) => s.toJson()).toList()};
 }
 
-class Device {
-  final String id;
+/// ESP'den /status ile alınan cihaz durumu
+class DeviceStatus {
   final String name;
   final bool online;
-  final String? lastSeenAt;
+  final String? ip;
   final Schedule schedule;
 
-  const Device({
-    required this.id,
+  const DeviceStatus({
     required this.name,
     required this.online,
-    this.lastSeenAt,
+    this.ip,
     required this.schedule,
   });
 
-  factory Device.fromJson(Map<String, dynamic> j) => Device(
-        id: j['id'] as String,
-        name: j['name'] as String,
-        online: j['online'] as bool? ?? false,
-        lastSeenAt: j['lastSeenAt'] as String?,
-        schedule: Schedule.fromJson(j['schedule'] as Map<String, dynamic>?),
+  factory DeviceStatus.fromJson(Map<String, dynamic> j) => DeviceStatus(
+        name: j['name'] as String? ?? 'PetFeeder',
+        online: j['online'] as bool? ?? true,
+        ip: j['ip'] as String?,
+        schedule: Schedule.fromJson(j['slots'] ?? j['schedule']),
       );
 }
 
-class HistoryEntry {
-  final String deviceId;
-  final String? feedingId;
-  final String? status;
-  final String? message;
-  final String ts;
+/// SharedPreferences'ta saklanan cihaz bilgisi
+class StoredDevice {
+  final String id;    // mdns adı, örn. "petfeeder-a1b2"
+  final String name;  // kullanıcının verdiği ad
+  final String host;  // "petfeeder-a1b2.local" veya IP
 
-  const HistoryEntry({
-    required this.deviceId,
-    this.feedingId,
-    this.status,
-    this.message,
-    required this.ts,
-  });
+  const StoredDevice({required this.id, required this.name, required this.host});
+
+  factory StoredDevice.fromJson(Map<String, dynamic> j) => StoredDevice(
+        id: j['id'] as String,
+        name: j['name'] as String,
+        host: j['host'] as String,
+      );
+
+  Map<String, dynamic> toJson() => {'id': id, 'name': name, 'host': host};
+
+  StoredDevice copyWith({String? name}) =>
+      StoredDevice(id: id, name: name ?? this.name, host: host);
+}
+
+/// UI'da kullanılan birleşik model
+class Device {
+  final StoredDevice stored;
+  final bool online;
+  final Schedule schedule;
+
+  const Device({required this.stored, required this.online, required this.schedule});
+
+  String get id   => stored.id;
+  String get name => stored.name;
+  String get host => stored.host;
+}
+
+class HistoryEntry {
+  final String ts;
+  final int portions;
+  final String? msg;
+
+  const HistoryEntry({required this.ts, required this.portions, this.msg});
 
   factory HistoryEntry.fromJson(Map<String, dynamic> j) => HistoryEntry(
-        deviceId: j['deviceId'] as String,
-        feedingId: j['feedingId'] as String?,
-        status: j['status'] as String?,
-        message: j['message'] as String?,
-        ts: j['ts'] as String,
+        ts: j['ts'] as String? ?? '',
+        portions: j['portions'] as int? ?? 0,
+        msg: j['msg'] as String?,
       );
 }

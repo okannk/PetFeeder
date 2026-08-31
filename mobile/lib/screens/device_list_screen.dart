@@ -2,10 +2,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../models/device.dart';
 import '../services/api_service.dart';
-import '../services/settings_service.dart';
+import '../services/device_storage.dart';
 import 'add_device_screen.dart';
 import 'device_detail_screen.dart';
-import 'settings_screen.dart';
 
 class DeviceListScreen extends StatefulWidget {
   const DeviceListScreen({super.key});
@@ -17,15 +16,14 @@ class DeviceListScreen extends StatefulWidget {
 class _DeviceListScreenState extends State<DeviceListScreen> {
   final _api = ApiService();
   List<Device> _devices = [];
-  String? _error;
   bool _loading = true;
   Timer? _timer;
 
   @override
   void initState() {
     super.initState();
-    _checkSettingsThenLoad();
-    _timer = Timer.periodic(const Duration(seconds: 5), (_) => _load(silent: true));
+    _load();
+    _timer = Timer.periodic(const Duration(seconds: 8), (_) => _load(silent: true));
   }
 
   @override
@@ -34,64 +32,45 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
     super.dispose();
   }
 
-  Future<void> _checkSettingsThenLoad() async {
-    final url = await SettingsService.getBaseUrl();
-    if (url.isEmpty) {
-      await _openSettings();
-    }
-    _load();
-  }
-
-  Future<void> _openSettings() async {
-    await Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const SettingsScreen()),
-    );
-  }
-
   Future<void> _load({bool silent = false}) async {
     if (!silent) setState(() => _loading = true);
-    try {
-      final devices = await _api.fetchDevices();
-      if (!mounted) return;
-      setState(() {
-        _devices = devices;
-        _error = null;
-        _loading = false;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _error = e.toString();
-        _loading = false;
-      });
-    }
+    final stored = await DeviceStorage.loadAll();
+
+    // Her cihaz için durum sorgula (paralel)
+    final futures = stored.map((s) async {
+      try {
+        final status = await _api.fetchStatus(s.host);
+        return Device(stored: s, online: true, schedule: status.schedule);
+      } catch (_) {
+        return Device(
+            stored: s,
+            online: false,
+            schedule: Schedule(slots: []));
+      }
+    });
+
+    final results = await Future.wait(futures);
+    if (!mounted) return;
+    setState(() {
+      _devices = results;
+      _loading = false;
+    });
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('🐾 PetFeeder'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.settings),
-            onPressed: () async {
-              await _openSettings();
-              _load();
-            },
-          ),
-        ],
-      ),
+      appBar: AppBar(title: const Text('🐾 PetFeeder')),
       body: RefreshIndicator(
         onRefresh: () => _load(),
         child: _buildBody(),
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () async {
-          final created = await Navigator.of(context).push<bool>(
+          final added = await Navigator.of(context).push<bool>(
             MaterialPageRoute(builder: (_) => const AddDeviceScreen()),
           );
-          if (created == true) _load();
+          if (added == true) _load();
         },
         icon: const Icon(Icons.add),
         label: const Text('Cihaz Ekle'),
@@ -103,54 +82,47 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
     if (_loading && _devices.isEmpty) {
       return const Center(child: CircularProgressIndicator());
     }
-    if (_error != null && _devices.isEmpty) {
-      return ListView(
-        children: [
-          const SizedBox(height: 80),
-          Icon(Icons.wifi_off, size: 48, color: Colors.grey[400]),
-          const SizedBox(height: 12),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24),
-            child: Text(_error!, textAlign: TextAlign.center),
-          ),
-          const SizedBox(height: 12),
-          Center(
-            child: TextButton(onPressed: _openSettings, child: const Text('Ayarlari kontrol et')),
-          ),
-        ],
-      );
-    }
     if (_devices.isEmpty) {
       return ListView(
         children: const [
           SizedBox(height: 100),
-          Center(child: Text('Henuz cihaz yok. Sag alttan ekleyebilirsin.')),
+          Center(
+            child: Column(children: [
+              Icon(Icons.pets, size: 56, color: Colors.grey),
+              SizedBox(height: 12),
+              Text('Henüz cihaz yok.\nSağ alttan cihaz ekleyebilirsin.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.grey)),
+            ]),
+          ),
         ],
       );
     }
     return ListView.builder(
       padding: const EdgeInsets.all(12),
       itemCount: _devices.length,
-      itemBuilder: (context, index) {
-        final device = _devices[index];
+      itemBuilder: (context, i) {
+        final d = _devices[i];
         return Card(
           child: ListTile(
-            title: Text(device.name),
-            subtitle: Text(device.lastSeenAt != null
-                ? 'Son gorulme: ${_formatDate(device.lastSeenAt!)}'
-                : 'Hic gorulmedi'),
+            leading: Icon(Icons.router,
+                color: d.online ? Colors.green[600] : Colors.grey),
+            title: Text(d.name),
+            subtitle: Text(d.host,
+                style: const TextStyle(fontSize: 12, color: Colors.grey)),
             trailing: Chip(
-              label: Text(device.online ? 'Cevrimici' : 'Cevrimdisi'),
-              backgroundColor: device.online ? Colors.green[100] : Colors.red[100],
+              label: Text(d.online ? 'Çevrimiçi' : 'Çevrimdışı'),
+              backgroundColor: d.online ? Colors.green[100] : Colors.red[100],
               labelStyle: TextStyle(
-                color: device.online ? Colors.green[800] : Colors.red[800],
+                color: d.online ? Colors.green[800] : Colors.red[800],
                 fontWeight: FontWeight.bold,
                 fontSize: 12,
               ),
             ),
             onTap: () async {
               await Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => DeviceDetailScreen(deviceId: device.id)),
+                MaterialPageRoute(
+                    builder: (_) => DeviceDetailScreen(device: d.stored)),
               );
               _load();
             },
@@ -159,11 +131,4 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
       },
     );
   }
-}
-
-String _formatDate(String iso) {
-  final dt = DateTime.tryParse(iso)?.toLocal();
-  if (dt == null) return iso;
-  String two(int n) => n.toString().padLeft(2, '0');
-  return '${two(dt.day)}.${two(dt.month)}.${dt.year} ${two(dt.hour)}:${two(dt.minute)}';
 }
