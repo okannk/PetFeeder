@@ -1,8 +1,19 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import '../services/backend_service.dart';
+
+/// RFC-4122 UUID v4 üretir (harici paket gerekmez)
+String _newUuid() {
+  final rng = Random.secure();
+  final b = List<int>.generate(16, (_) => rng.nextInt(256));
+  b[6] = (b[6] & 0x0F) | 0x40;
+  b[8] = (b[8] & 0x3F) | 0x80;
+  final h = b.map((x) => x.toRadixString(16).padLeft(2, '0')).join();
+  return '${h.substring(0,8)}-${h.substring(8,12)}-${h.substring(12,16)}-${h.substring(16,20)}-${h.substring(20)}';
+}
 
 const _setupIp = '192.168.4.1';
 const _setupTimeout = Duration(seconds: 45);
@@ -119,7 +130,7 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
     }
     setState(() { _registering = true; _registerError = null; });
     try {
-      final result = await BackendService.registerDevice(null, name);
+      final result = await BackendService.registerDevice(_newUuid(), name);
       _deviceId = result['id'] as String?;
       _mqttUser = result['mqttUser'] as String?;
       _mqttPass = result['mqttPass'] as String?;
