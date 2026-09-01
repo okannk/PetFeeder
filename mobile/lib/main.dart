@@ -1,15 +1,22 @@
 import 'package:flutter/material.dart';
+import 'services/backend_service.dart';
 import 'services/notification_service.dart';
+import 'screens/auth_screen.dart';
 import 'screens/device_list_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await NotificationService.init();
-  runApp(const PetFeederApp());
+
+  // JWT var mı kontrol et
+  final loggedIn = await BackendService.isLoggedIn();
+
+  runApp(PetFeederApp(loggedIn: loggedIn));
 }
 
 class PetFeederApp extends StatelessWidget {
-  const PetFeederApp({super.key});
+  final bool loggedIn;
+  const PetFeederApp({super.key, required this.loggedIn});
 
   @override
   Widget build(BuildContext context) {
@@ -20,7 +27,7 @@ class PetFeederApp extends StatelessWidget {
         useMaterial3: true,
         colorSchemeSeed: const Color(0xFF2F7D5F),
       ),
-      home: const DeviceListScreen(),
+      home: loggedIn ? const DeviceListScreen() : const AuthScreen(),
     );
   }
 }

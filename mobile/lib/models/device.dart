@@ -1,5 +1,3 @@
-// Cihaz modelleri — backend yok, ESP'ye direkt HTTP
-
 class ScheduleSlot {
   final String id;
   final String label;
@@ -50,95 +48,116 @@ class Schedule {
   final List<ScheduleSlot> slots;
   const Schedule({required this.slots});
 
-  static List<ScheduleSlot> _defaults() => [
-        const ScheduleSlot(id: 'slot1', label: 'Sabah', enabled: false, hour: 8,  minute: 0, portions: 1),
-        const ScheduleSlot(id: 'slot2', label: 'Öğle',  enabled: false, hour: 12, minute: 0, portions: 1),
-        const ScheduleSlot(id: 'slot3', label: 'Akşam', enabled: false, hour: 18, minute: 0, portions: 1),
-        const ScheduleSlot(id: 'slot4', label: 'Gece',  enabled: false, hour: 22, minute: 0, portions: 1),
+  static List<ScheduleSlot> _defaultSlots() => [
+        const ScheduleSlot(
+            id: 'slot1', label: 'Sabah', enabled: false, hour: 8, minute: 0, portions: 1),
+        const ScheduleSlot(
+            id: 'slot2', label: 'Öğle', enabled: false, hour: 12, minute: 0, portions: 1),
+        const ScheduleSlot(
+            id: 'slot3', label: 'Akşam', enabled: false, hour: 18, minute: 0, portions: 1),
+        const ScheduleSlot(
+            id: 'slot4', label: 'Gece', enabled: false, hour: 22, minute: 0, portions: 1),
       ];
 
-  factory Schedule.fromJson(dynamic j) {
-    if (j == null) return Schedule(slots: _defaults());
-    if (j is List) {
-      return Schedule(slots: j.map((s) => ScheduleSlot.fromJson(s as Map<String, dynamic>)).toList());
+  factory Schedule.fromJson(Map<String, dynamic>? j) {
+    if (j == null) return Schedule(slots: _defaultSlots());
+
+    // Backend'den gelen slots listesi
+    if (j['slots'] is List) {
+      final slots = (j['slots'] as List)
+          .map((s) => ScheduleSlot.fromJson(s as Map<String, dynamic>))
+          .toList();
+      return Schedule(slots: slots.isEmpty ? _defaultSlots() : slots);
     }
-    if (j is Map<String, dynamic> && j['slots'] is List) {
-      return Schedule(
-          slots: (j['slots'] as List)
-              .map((s) => ScheduleSlot.fromJson(s as Map<String, dynamic>))
-              .toList());
-    }
-    return Schedule(slots: _defaults());
+
+    // Eski morning/evening formatı — migrate et
+    final m = j['morning'] as Map<String, dynamic>?;
+    final e = j['evening'] as Map<String, dynamic>?;
+    return Schedule(slots: [
+      ScheduleSlot(
+          id: 'slot1',
+          label: 'Sabah',
+          enabled: m?['enabled'] as bool? ?? false,
+          hour: m?['hour'] as int? ?? 8,
+          minute: m?['minute'] as int? ?? 0,
+          portions: m?['portions'] as int? ?? 1),
+      const ScheduleSlot(
+          id: 'slot2', label: 'Öğle', enabled: false, hour: 12, minute: 0, portions: 1),
+      ScheduleSlot(
+          id: 'slot3',
+          label: 'Akşam',
+          enabled: e?['enabled'] as bool? ?? false,
+          hour: e?['hour'] as int? ?? 18,
+          minute: e?['minute'] as int? ?? 0,
+          portions: e?['portions'] as int? ?? 1),
+      const ScheduleSlot(
+          id: 'slot4', label: 'Gece', enabled: false, hour: 22, minute: 0, portions: 1),
+    ]);
   }
 
   Map<String, dynamic> toJson() => {'slots': slots.map((s) => s.toJson()).toList()};
 }
 
-/// ESP'den /status ile alınan cihaz durumu
-class DeviceStatus {
+class Device {
+  final String id;
   final String name;
   final bool online;
-  final String? ip;
+  final String? lastSeenAt;
   final Schedule schedule;
 
-  const DeviceStatus({
+  const Device({
+    required this.id,
     required this.name,
     required this.online,
-    this.ip,
+    this.lastSeenAt,
     required this.schedule,
   });
 
-  factory DeviceStatus.fromJson(Map<String, dynamic> j) => DeviceStatus(
-        name: j['name'] as String? ?? 'PetFeeder',
-        online: j['online'] as bool? ?? true,
-        ip: j['ip'] as String?,
-        schedule: Schedule.fromJson(j['slots'] ?? j['schedule']),
-      );
-}
+  /// Backend'den gelen format:
+  /// { id, name, online, last_seen, fw_version, schedule: [...] }
+  /// schedule alanı JSONB array (slot listesi).
+  factory Device.fromJson(Map<String, dynamic> j) {
+    // Schedule: backend'den düz slot listesi olarak gelir
+    final rawSchedule = j['schedule'];
+    Map<String, dynamic>? schedJson;
+    if (rawSchedule is List) {
+      schedJson = {'slots': rawSchedule};
+    } else if (rawSchedule is Map) {
+      schedJson = Map<String, dynamic>.from(rawSchedule);
+    }
 
-/// SharedPreferences'ta saklanan cihaz bilgisi
-class StoredDevice {
-  final String id;    // mdns adı, örn. "petfeeder-a1b2"
-  final String name;  // kullanıcının verdiği ad
-  final String host;  // "petfeeder-a1b2.local" veya IP
-
-  const StoredDevice({required this.id, required this.name, required this.host});
-
-  factory StoredDevice.fromJson(Map<String, dynamic> j) => StoredDevice(
-        id: j['id'] as String,
-        name: j['name'] as String,
-        host: j['host'] as String,
-      );
-
-  Map<String, dynamic> toJson() => {'id': id, 'name': name, 'host': host};
-
-  StoredDevice copyWith({String? name}) =>
-      StoredDevice(id: id, name: name ?? this.name, host: host);
-}
-
-/// UI'da kullanılan birleşik model
-class Device {
-  final StoredDevice stored;
-  final bool online;
-  final Schedule schedule;
-
-  const Device({required this.stored, required this.online, required this.schedule});
-
-  String get id   => stored.id;
-  String get name => stored.name;
-  String get host => stored.host;
+    return Device(
+      id: j['id'] as String,
+      name: j['name'] as String? ?? 'PetFeeder',
+      online: j['online'] as bool? ?? false,
+      // Backend snake_case: last_seen; eski format: lastSeenAt
+      lastSeenAt: j['last_seen'] as String? ?? j['lastSeenAt'] as String?,
+      schedule: Schedule.fromJson(schedJson),
+    );
+  }
 }
 
 class HistoryEntry {
+  final String? deviceId;
+  final int? portions;
+  final String? status;
+  final String? message;
   final String ts;
-  final int portions;
-  final String? msg;
 
-  const HistoryEntry({required this.ts, required this.portions, this.msg});
+  const HistoryEntry({
+    this.deviceId,
+    this.portions,
+    this.status,
+    this.message,
+    required this.ts,
+  });
 
+  /// Backend format: { portions, message, ts }
   factory HistoryEntry.fromJson(Map<String, dynamic> j) => HistoryEntry(
-        ts: j['ts'] as String? ?? '',
-        portions: j['portions'] as int? ?? 0,
-        msg: j['msg'] as String?,
+        deviceId: j['deviceId'] as String? ?? j['device_id'] as String?,
+        portions: j['portions'] as int?,
+        status: j['status'] as String?,
+        message: j['message'] as String?,
+        ts: j['ts'] as String? ?? j['created_at'] as String? ?? '',
       );
 }
