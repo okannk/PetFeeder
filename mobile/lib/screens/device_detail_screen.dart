@@ -1,21 +1,19 @@
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../models/device.dart';
-import '../services/api_service.dart';
-import '../services/device_storage.dart';
+import '../services/backend_service.dart';
 import '../services/notification_service.dart';
 
 class DeviceDetailScreen extends StatefulWidget {
-  final StoredDevice device;
-  const DeviceDetailScreen({super.key, required this.device});
+  final String deviceId;
+  const DeviceDetailScreen({super.key, required this.deviceId});
 
   @override
   State<DeviceDetailScreen> createState() => _DeviceDetailScreenState();
 }
 
 class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
-  final _api = ApiService();
-  bool _online = false;
+  Device? _device;
   List<ScheduleSlot> _slots = [];
   List<HistoryEntry> _history = [];
   bool _loading = true;
@@ -32,30 +30,36 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
   Future<void> _load() async {
     setState(() => _loading = true);
     try {
-      final status  = await _api.fetchStatus(widget.device.host);
-      final history = await _api.fetchHistory(widget.device.host);
+      final devices = await BackendService.getDevices();
+      final device = devices.firstWhere(
+        (d) => d.id == widget.deviceId,
+        orElse: () => throw Exception('Cihaz bulunamadı'),
+      );
+      final schedule = await BackendService.getSchedule(widget.deviceId);
+      final history = await BackendService.getHistory(widget.deviceId);
       if (!mounted) return;
       setState(() {
-        _online  = status.online;
-        _slots   = List.from(status.schedule.slots);
+        _device = device;
+        _slots = List.from(schedule.slots);
         _history = history;
         _loading = false;
       });
-    } catch (_) {
+    } catch (e) {
       if (!mounted) return;
-      setState(() { _online = false; _loading = false; });
+      setState(() => _loading = false);
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Yüklenemedi: $e')));
     }
   }
 
   Future<void> _feed() async {
     setState(() => _feeding = true);
     try {
-      final result = await _api.feed(widget.device.host, _feedPortions);
+      final result = await BackendService.feed(widget.deviceId, _feedPortions);
       if (!mounted) return;
       final msg = result['message']?.toString() ?? 'Besleme tamamlandı.';
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(msg)));
-      await NotificationService.showNow('PetFeeder — ${widget.device.name}', msg);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+      await NotificationService.showNow('PetFeeder — ${_device?.name ?? ''}', msg);
     } catch (e) {
       if (mounted)
         ScaffoldMessenger.of(context)
@@ -69,9 +73,10 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
   Future<void> _saveSchedule() async {
     setState(() => _savingSchedule = true);
     try {
-      await _api.updateSchedule(widget.device.host, Schedule(slots: _slots));
+      await BackendService.updateSchedule(
+          widget.deviceId, Schedule(slots: _slots));
       await NotificationService.scheduleFeedings(
-          widget.device.id, widget.device.name, _slots);
+          widget.deviceId, _device?.name ?? '', _slots);
       if (mounted)
         ScaffoldMessenger.of(context)
             .showSnackBar(const SnackBar(content: Text('Zamanlama kaydedildi.')));
@@ -85,7 +90,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
   }
 
   Future<void> _rename() async {
-    final ctrl = TextEditingController(text: widget.device.name);
+    final ctrl = TextEditingController(text: _device?.name ?? '');
     final result = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -96,7 +101,8 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
           decoration: const InputDecoration(border: OutlineInputBorder()),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('İptal')),
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(), child: const Text('İptal')),
           FilledButton(
               onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim()),
               child: const Text('Kaydet')),
@@ -105,10 +111,11 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
     );
     if (result != null && result.isNotEmpty) {
       try {
-        await _api.renameDevice(widget.device.host, result);
-        final updated = widget.device.copyWith(name: result);
-        await DeviceStorage.update(updated);
-        if (mounted) Navigator.of(context).pop(true);
+        final updated = await BackendService.renameDevice(widget.deviceId, result);
+        if (mounted) {
+          setState(() => _device = updated);
+          Navigator.of(context).pop(true);
+        }
       } catch (e) {
         if (mounted)
           ScaffoldMessenger.of(context)
@@ -118,14 +125,16 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
   }
 
   Future<void> _delete() async {
+    final name = _device?.name ?? 'Cihaz';
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Cihazı Kaldır'),
-        content: Text('${widget.device.name} listeden kaldırılacak.'),
+        content: Text('$name listeden kaldırılacak.'),
         actions: [
           TextButton(
-              onPressed: () => Navigator.of(ctx).pop(false), child: const Text('İptal')),
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('İptal')),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: Colors.red),
             onPressed: () => Navigator.of(ctx).pop(true),
@@ -135,9 +144,15 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
       ),
     );
     if (confirmed == true && mounted) {
-      await DeviceStorage.remove(widget.device.id);
-      await NotificationService.cancelDevice(widget.device.id);
-      if (mounted) Navigator.of(context).pop(true);
+      try {
+        await BackendService.deleteDevice(widget.deviceId);
+        await NotificationService.cancelDevice(widget.deviceId);
+        if (mounted) Navigator.of(context).pop(true);
+      } catch (e) {
+        if (mounted)
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text('Silinemedi: $e')));
+      }
     }
   }
 
@@ -145,7 +160,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.device.name),
+        title: Text(_device?.name ?? 'Cihaz'),
         actions: [
           PopupMenuButton<String>(
             onSelected: (v) {
@@ -190,57 +205,55 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
     );
   }
 
-  Widget _buildStatusFeedCard() => Card(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Row(children: [
-              Icon(_online ? Icons.wifi : Icons.wifi_off,
-                  size: 18,
-                  color: _online ? Colors.green[700] : Colors.red[700]),
-              const SizedBox(width: 6),
-              Text(
-                _online ? 'Çevrimiçi' : 'Çevrimdışı',
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  color: _online ? Colors.green[700] : Colors.red[700],
-                ),
-              ),
-              const Spacer(),
-              Text(widget.device.host,
-                  style: const TextStyle(fontSize: 11, color: Colors.grey)),
-            ]),
-            const SizedBox(height: 12),
-            Row(children: [
-              const Text('Porsiyon: '),
-              IconButton(
-                icon: const Icon(Icons.remove_circle_outline),
-                onPressed: _feedPortions > 1
-                    ? () => setState(() => _feedPortions--)
-                    : null,
-              ),
-              Text('$_feedPortions',
-                  style: const TextStyle(
-                      fontSize: 16, fontWeight: FontWeight.bold)),
-              IconButton(
-                icon: const Icon(Icons.add_circle_outline),
-                onPressed: _feedPortions < 10
-                    ? () => setState(() => _feedPortions++)
-                    : null,
-              ),
-            ]),
-            const SizedBox(height: 4),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton.icon(
-                onPressed: (_online && !_feeding) ? _feed : null,
-                icon: const Icon(Icons.restaurant),
-                label: Text(_feeding ? 'Besleniyor...' : 'Şimdi Besle'),
+  Widget _buildStatusFeedCard() {
+    final online = _device?.online ?? false;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Icon(online ? Icons.wifi : Icons.wifi_off,
+                size: 18,
+                color: online ? Colors.green[700] : Colors.red[700]),
+            const SizedBox(width: 6),
+            Text(
+              online ? 'Çevrimiçi' : 'Çevrimdışı',
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                color: online ? Colors.green[700] : Colors.red[700],
               ),
             ),
           ]),
-        ),
-      );
+          const SizedBox(height: 12),
+          Row(children: [
+            const Text('Porsiyon: '),
+            IconButton(
+              icon: const Icon(Icons.remove_circle_outline),
+              onPressed:
+                  _feedPortions > 1 ? () => setState(() => _feedPortions--) : null,
+            ),
+            Text('$_feedPortions',
+                style:
+                    const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            IconButton(
+              icon: const Icon(Icons.add_circle_outline),
+              onPressed:
+                  _feedPortions < 10 ? () => setState(() => _feedPortions++) : null,
+            ),
+          ]),
+          const SizedBox(height: 4),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton.icon(
+              onPressed: (online && !_feeding) ? _feed : null,
+              icon: const Icon(Icons.restaurant),
+              label: Text(_feeding ? 'Besleniyor...' : 'Şimdi Besle'),
+            ),
+          ),
+        ]),
+      ),
+    );
+  }
 
   Widget _buildScheduleCard() => Card(
         child: Padding(
@@ -296,8 +309,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
             const Padding(
               padding: EdgeInsets.symmetric(horizontal: 2),
               child: Text(':',
-                  style: TextStyle(
-                      fontWeight: FontWeight.bold, fontSize: 16)),
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
             ),
             _numPad(slot.minute, 0, 59,
                 (v) => setState(() => _slots[i] = slot.copyWith(minute: v)),
@@ -319,7 +331,8 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
     final label = pad ? value.toString().padLeft(2, '0') : value.toString();
     return Row(mainAxisSize: MainAxisSize.min, children: [
       SizedBox(
-        width: 22, height: 30,
+        width: 22,
+        height: 30,
         child: IconButton(
           padding: EdgeInsets.zero,
           iconSize: 15,
@@ -331,11 +344,11 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
         width: 26,
         child: Text(label,
             textAlign: TextAlign.center,
-            style: const TextStyle(
-                fontSize: 14, fontWeight: FontWeight.w500)),
+            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
       ),
       SizedBox(
-        width: 22, height: 30,
+        width: 22,
+        height: 30,
         child: IconButton(
           padding: EdgeInsets.zero,
           iconSize: 15,
@@ -441,8 +454,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                     '${rod.toY.toInt()} besleme',
                     TextStyle(
                       fontSize: 11,
-                      color:
-                          Theme.of(context).colorScheme.onInverseSurface,
+                      color: Theme.of(context).colorScheme.onInverseSurface,
                     ),
                   ),
                 ),
@@ -474,7 +486,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      '${_fmtTs(h.ts)} — ${h.msg ?? '${h.portions} porsiyon'}',
+                      '${_fmtTs(h.ts)} — ${h.message ?? '${h.portions ?? 0} porsiyon'}',
                       style: const TextStyle(fontSize: 13),
                     ),
                   ),
@@ -487,9 +499,8 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
 }
 
 String _fmtTs(String s) {
-  // ISO format → yerel saat
   final dt = DateTime.tryParse(s)?.toLocal();
-  if (dt == null) return s; // "boot+XXs" gibi
+  if (dt == null) return s;
   String z(int n) => n.toString().padLeft(2, '0');
   return '${z(dt.day)}.${z(dt.month)}.${dt.year} ${z(dt.hour)}:${z(dt.minute)}';
 }
